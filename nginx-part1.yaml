@@ -1,0 +1,45 @@
+---
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Creates a security group and a launch template"
+Resources:
+
+# This security group defines firewall rules for the Nginx server
+# We allow HTTP and SSH
+  NginxSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupDescription: 'Allow HTTP and SSH'
+      GroupName: 'NginxSecurityGroup'
+      SecurityGroupIngress: 
+        - CidrIp: '0.0.0.0/0'
+          IpProtocol: TCP
+          FromPort: 80
+          ToPort: 80
+        - CidrIp: '0.0.0.0/0'
+          IpProtocol: TCP
+          FromPort: 22
+          ToPort: 22
+      Tags:
+        - Key: 'Name'
+          Value: 'NginxSecurityGroup'   
+          
+# Creates a launch template       
+  NginxLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties: 
+      LaunchTemplateName: 'NginxLaunchTemplate'
+      LaunchTemplateData: 
+        ImageId: "ami-0c1bc246476a5572b"
+        InstanceType: "t2.micro"
+        UserData: 
+          Fn::Base64: |
+            #!/bin/bash
+            yum update -y
+            amazon-linux-extras install nginx1 -y
+            systemctl start nginx
+            systemctl enable nginx
+            cd /usr/share/nginx/html
+            sed -i 's/nginx/nataliex/' index.html 
+        SecurityGroups: 
+        - Ref: 'NginxSecurityGroup'
