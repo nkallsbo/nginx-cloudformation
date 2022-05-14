@@ -1,4 +1,4 @@
-# nginx-cloudformation-1
+# nginx-cloudformation
 This is for a school project. 
 
 Create a robust, secure, scalable hosting environment for a web application.
