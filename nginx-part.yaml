@@ -1,45 +1,194 @@
----
-
 AWSTemplateFormatVersion: "2010-09-09"
-Description: "Creates a security group and a launch template"
-Resources:
 
-# This security group defines firewall rules for the Nginx server
-# We allow HTTP and SSH
+Description: This template creates Auto Scaling Group, LoadBalancer
+# The Parameters section enables you to input custom values to your template in the console. 
+# You can also use Parameters as a source of reference when entering values on other sections
+
+# I’m using VpcCIDR as my Parameter Logical ID, String as my Data Type for Type subsection, 
+# and Default & Description sub sections as my Parameter Properties
+Parameters:
+  EC2KeyName:
+    Description: Name of an EC2 KeyPair to enable SSH access to the instance.
+    Type: AWS::EC2::KeyPair::KeyName  
+    Default: DemoKey
+  
+  VPCID:
+    Description: ID of the default VPC
+    Type: String
+    Default: vpc-??
+  
+Resources:
+    #This creates a Security Group for Instances directed from Load Balancer
   NginxSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties: 
-      GroupDescription: 'Allow HTTP and SSH'
-      GroupName: 'NginxSecurityGroup'
-      SecurityGroupIngress: 
-        - CidrIp: '0.0.0.0/0'
-          IpProtocol: TCP
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Enable HTTP/port 80 via load balancer and SSH/port 22 via internet.
+      SecurityGroupIngress:
+        - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
-        - CidrIp: '0.0.0.0/0'
-          IpProtocol: TCP
+          SourceSecurityGroupId: !Ref ALBNginxSecurityGroup
+        - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
+          CidrIp: 0.0.0.0/0
       Tags:
-        - Key: 'Name'
-          Value: 'NginxSecurityGroup'   
-          
-# Creates a launch template       
+        - Key: Name
+          Value: NginxSecurityGroup
+      VpcId: !Ref VPCID
+
+    #This creates a security group for Load Balancer
+  ALBNginxSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Enable HTTP access on port 80
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0        
+      Tags:
+        - Key: Name
+          Value: ALBNginxSecurityGroup
+      VpcId: !Ref VPCID
+
   NginxLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
-    Properties: 
-      LaunchTemplateName: 'NginxLaunchTemplate'
-      LaunchTemplateData: 
-        ImageId: "ami-0c1bc246476a5572b"
-        InstanceType: "t2.micro"
+    Properties:
+      LaunchTemplateName: NginxLaunchTemplate
+      LaunchTemplateData:
+        ImageId: ami-0ea0f26a6d50850c5
+        InstanceType: t2.micro
+        KeyName: !Ref EC2KeyName
+        Monitoring:
+          Enabled: true
+        SecurityGroupIds:
+          - !Ref NginxSecurityGroup
         UserData: 
           Fn::Base64: |
-            #!/bin/bash
-            yum update -y
-            amazon-linux-extras install nginx1 -y
-            systemctl start nginx
-            systemctl enable nginx
-            cd /usr/share/nginx/html
-            sed -i 's/nginx/nataliex/' index.html 
-        SecurityGroupIds: 
-          - !GetAtt NginxSecurityGroup.GroupId
+              #!/bin/bash
+              yum update -y
+              amazon-linux-extras install nginx1 -y
+              systemctl start nginx
+              systemctl enable nginx
+              cd /usr/share/nginx/html
+              sed -i 's/nginx/nataliex/' index.html
+            
+
+  NginxAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: NginxAutoScalingGroup 
+      AvailabilityZones: !GetAZs '' 
+      HealthCheckGracePeriod: 60
+      HealthCheckType: ELB
+      LaunchTemplate:
+        LaunchTemplateId: !Ref NginxLaunchTemplate
+        Version: !GetAtt NginxLaunchTemplate.LatestVersionNumber
+      MinSize: 2
+      MaxSize: 5
+      DesiredCapacity: 2
+      Tags:
+        - Key: Name
+          Value: NginxAutoScalingGroup
+          PropagateAtLaunch: true
+      TargetGroupARNs:
+        - !Ref ALBTargetGroup   
+
+  WebServerScaleUpPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref NginxAutoScalingGroup
+      Cooldown: 20
+      ScalingAdjustment: 1
+
+  WebServerScaleDownPolicy:
+    Type: 'AWS::AutoScaling::ScalingPolicy'
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref NginxAutoScalingGroup
+      Cooldown: 20
+      ScalingAdjustment: -1
+
+  CPUAlarmHigh:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale-up if CPU > 50% for 1 minute
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2      
+      Period: 60
+      Statistic: Average
+      EvaluationPeriods: 2
+      Threshold: 50
+      AlarmActions:
+        - !Ref WebServerScaleUpPolicy
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref NginxAutoScalingGroup
+      ComparisonOperator: GreaterThanThreshold
+
+  CPUAlarmLow:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale-down if CPU < 40% for 5 minutes
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 40
+      AlarmActions:
+        - !Ref WebServerScaleDownPolicy
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref NginxAutoScalingGroup
+      ComparisonOperator: LessThanThreshold   
+
+    #Create an Application Load Balancer
+  ALBNginx:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: MyNginxApplicationLoadBalancer
+      SecurityGroups: 
+        - !Ref ALBNginxSecurityGroup
+      Subnets:
+        - subnet-??
+        - subnet-??
+        - subnet-??
+
+
+  #Create a Listener on Port 80
+  ALBListenerHttp:
+    Type : AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+      LoadBalancerArn: !Ref ALBNginx
+      Port: 80
+      Protocol: HTTP
+
+  # Create a Target Group
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: /
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      Matcher:
+        HttpCode: 200
+      Name: ALBTargetGroup
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 5
+      VpcId: !Ref VPCID
+
+Outputs:
+  # Export Application Load Balancer Dns Name
+  ApplicationLoadBalancerDnsName:
+    Description: Application Load Balancer DNS Name
+    Export:
+      Name: !Sub ${AWS::StackName}-ALBNginxDnsName
+    Value: !GetAtt ALBNginx.DNSName
