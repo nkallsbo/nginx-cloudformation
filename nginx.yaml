@@ -11,13 +11,15 @@ Parameters:
     Description: Name of an EC2 KeyPair to enable SSH access to the instance.
     Type: AWS::EC2::KeyPair::KeyName  
     Default: DemoKey
-  
+    
+# Your preferred VPC  
   VPCID:
     Description: ID of the default VPC
     Type: String
     Default: vpc-??
   
 Resources:
+
     #This creates a Security Group for Instances directed from Load Balancer
   NginxSecurityGroup:
     Type: 'AWS::EC2::SecurityGroup'
@@ -37,7 +39,7 @@ Resources:
           Value: NginxSecurityGroup
       VpcId: !Ref VPCID
 
-    #This creates a security group for Load Balancer
+  #This creates a security group for Load Balancer
   ALBNginxSecurityGroup:
     Type: 'AWS::EC2::SecurityGroup'
     Properties:
@@ -51,7 +53,7 @@ Resources:
         - Key: Name
           Value: ALBNginxSecurityGroup
       VpcId: !Ref VPCID
-
+# The launchtamplate that the Auto Scaling Group creates an Instance from
   NginxLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
@@ -74,7 +76,7 @@ Resources:
               cd /usr/share/nginx/html
               sed -i 's/nginx/nataliex/' index.html
             
-
+# Auto Sacling group with the Avalability Zone your in, creates an Instance from NginxLaunchTemplate
   NginxAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
@@ -145,7 +147,7 @@ Resources:
           Value: !Ref NginxAutoScalingGroup
       ComparisonOperator: LessThanThreshold   
 
-    #Create an Application Load Balancer
+  #Create an Application Load Balancer
   ALBNginx:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
